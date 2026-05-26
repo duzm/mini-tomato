@@ -10,7 +10,6 @@ import json
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox
 
 import pystray
 from PIL import Image
@@ -26,7 +25,8 @@ timer_job = None
 timer_active = False
 current_phase = None
 root = None
-entry = None
+focus_entry = None
+break_entry = None
 start_button = None
 tray_icon = None
 tray_thread = None
@@ -36,7 +36,7 @@ root_position_job = None
 
 SETTINGS_DIR_NAME = "MiniTomato"
 SETTINGS_FILE_NAME = "settings.json"
-WINDOW_SIZE = (300, 240)
+WINDOW_SIZE = (360, 360)
 FLOAT_WINDOW_SIZE = (200, 100)
 
 
@@ -86,14 +86,14 @@ def set_saved_position(key, x, y):
         pass
 
 
-def get_saved_focus_minutes():
-    default_minutes = DEFAULT_WORK_TIME // 60
-    minutes = app_settings.get("focus_minutes")
+def get_saved_minutes(key, default_seconds):
+    default_minutes = default_seconds // 60
+    minutes = app_settings.get(key)
     return minutes if isinstance(minutes, int) and minutes > 0 else default_minutes
 
 
-def set_saved_focus_minutes(minutes):
-    app_settings["focus_minutes"] = int(minutes)
+def set_saved_minutes(key, minutes):
+    app_settings[key] = int(minutes)
     try:
         save_settings()
     except OSError:
@@ -226,6 +226,114 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
+def bind_hover_style(button, font_size=11):
+    normal_bg = '#A3DCB1'
+    hover_bg = '#8DCEA0'
+    pressed_bg = '#7CC08F'
+
+    button.config(
+        bg=normal_bg,
+        fg='#333333',
+        font=("", font_size),
+        activebackground=pressed_bg,
+        activeforeground='#333333',
+        disabledforeground='#6B6B6B',
+        highlightbackground=normal_bg,
+        highlightcolor=hover_bg,
+        takefocus=False,
+    )
+
+    def on_enter(event):
+        event.widget.config(bg=hover_bg, font=("", font_size, "bold"))
+
+    def on_leave(event):
+        event.widget.config(bg=normal_bg, font=("", font_size))
+
+    def on_press(event):
+        event.widget.config(bg=pressed_bg, font=("", font_size, "bold"))
+
+    def on_release(event):
+        widget = event.widget
+        x_root = widget.winfo_pointerx()
+        y_root = widget.winfo_pointery()
+        inside_x = 0 <= x_root - widget.winfo_rootx() <= widget.winfo_width()
+        inside_y = 0 <= y_root - widget.winfo_rooty() <= widget.winfo_height()
+        if inside_x and inside_y:
+            widget.config(bg=hover_bg, font=("", font_size, "bold"))
+        else:
+            widget.config(bg=normal_bg, font=("", font_size))
+
+    button.bind("<Enter>", on_enter)
+    button.bind("<Leave>", on_leave)
+    button.bind("<ButtonPress-1>", on_press)
+    button.bind("<ButtonRelease-1>", on_release)
+
+
+def get_dialog_position(width, height):
+    if root is not None and root.winfo_exists() and root.state() != "withdrawn":
+        return root.winfo_x() + (root.winfo_width() - width) // 2, root.winfo_y() + (root.winfo_height() - height) // 2
+
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    return (screen_width - width) // 2, (screen_height - height) // 2
+
+
+def show_info_dialog(title, message):
+    dialog = tk.Toplevel(root)
+    dialog.withdraw()
+    dialog.title(title)
+    dialog.configure(bg='#C7EDCC')
+    dialog.resizable(False, False)
+    dialog.attributes("-topmost", True)
+
+    try:
+        dialog.iconbitmap(resource_path(ICON_FILE))
+    except tk.TclError:
+        pass
+
+    width = 320
+    height = 170
+    x_position, y_position = get_dialog_position(width, height)
+    dialog.geometry(f"{width}x{height}+{x_position}+{y_position}")
+
+    def close_dialog(event=None):
+        dialog.destroy()
+
+    title_label = tk.Label(dialog, text=title, font=("", 13), bg='#C7EDCC', fg='#333333')
+    title_label.pack(pady=(18, 10))
+
+    message_label = tk.Label(
+        dialog, text=message, font=("", 11), bg='#C7EDCC', fg='#333333', wraplength=260, justify='center'
+    )
+    message_label.pack(padx=24)
+
+    ok_button = tk.Button(
+        dialog,
+        text="确定",
+        command=close_dialog,
+        font=("", 11),
+        relief='flat',
+        bd=0,
+        highlightthickness=0,
+        width=12,
+        height=2,
+    )
+    ok_button.pack(pady=(20, 18))
+    bind_hover_style(ok_button)
+
+    if root is not None and root.winfo_exists() and root.state() != "withdrawn":
+        dialog.transient(root)
+
+    dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+    dialog.bind("<Return>", close_dialog)
+    dialog.bind("<Escape>", close_dialog)
+    dialog.grab_set()
+    dialog.deiconify()
+    dialog.lift()
+    ok_button.focus_set()
+    root.wait_window(dialog)
+
+
 def show_about():
     """显示关于对话框"""
     about_window = tk.Toplevel(root)
@@ -259,9 +367,18 @@ GitHub: {GITHUB_URL}
 
     # 确定按钮
     ok_button = tk.Button(
-        about_window, text="确定", command=about_window.destroy, bg='#A3DCB1', fg='#333333', width=10, height=1
+        about_window,
+        text="确定",
+        command=about_window.destroy,
+        width=12,
+        height=2,
+        relief='flat',
+        bd=0,
+        highlightthickness=0,
     )
-    ok_button.pack(pady=10)
+
+    ok_button.pack(pady=(10, 14))
+    bind_hover_style(ok_button)
 
     # 设置模态窗口
     about_window.transient(root)
@@ -270,27 +387,42 @@ GitHub: {GITHUB_URL}
     root.wait_window(about_window)
 
 
-def get_focus_minutes():
-    value = entry.get().strip()
+def get_entry_minutes(entry_widget, default_seconds):
+    value = entry_widget.get().strip()
     if not value:
-        return DEFAULT_WORK_TIME // 60
+        return default_seconds // 60
     try:
         minutes = int(value)
     except ValueError:
-        return DEFAULT_WORK_TIME // 60
-    return minutes if minutes > 0 else DEFAULT_WORK_TIME // 60
+        return default_seconds // 60
+    return minutes if minutes > 0 else default_seconds // 60
+
+
+def get_focus_minutes():
+    return get_entry_minutes(focus_entry, DEFAULT_WORK_TIME)
+
+
+def get_break_minutes():
+    return get_entry_minutes(break_entry, DEFAULT_BREAK_TIME)
+
+
+def save_duration_settings(focus_minutes, break_minutes):
+    set_saved_minutes("focus_minutes", focus_minutes)
+    set_saved_minutes("break_minutes", break_minutes)
 
 
 def start_focus_session():
-    minutes = get_focus_minutes()
-    set_saved_focus_minutes(minutes)
-    start_timer(work_time=minutes * 60)
+    focus_minutes = get_focus_minutes()
+    break_minutes = get_break_minutes()
+    save_duration_settings(focus_minutes, break_minutes)
+    start_timer(work_time=focus_minutes * 60, break_time=break_minutes * 60)
 
 
 def start_break_session():
-    minutes = get_focus_minutes()
-    set_saved_focus_minutes(minutes)
-    start_timer(work_time=minutes * 60, break_time=DEFAULT_BREAK_TIME, is_work_time=False)
+    focus_minutes = get_focus_minutes()
+    break_minutes = get_break_minutes()
+    save_duration_settings(focus_minutes, break_minutes)
+    start_timer(work_time=focus_minutes * 60, break_time=break_minutes * 60, is_work_time=False)
 
 
 def update_timer_controls():
@@ -378,15 +510,16 @@ def start_timer(work_time=DEFAULT_WORK_TIME, break_time=DEFAULT_BREAK_TIME, is_w
         mins, secs = divmod(count, 60)
         time_format = '{:02d}:{:02d}'.format(mins, secs)
         label.config(text=time_format)
+
         if count > 0:
             timer_job = float_window.after(1000, countdown, count - 1)
         else:
             clear_timer_state(cancel_job=False)
             if is_work_time:
-                messagebox.showinfo("时间到", "工作时间结束！休息一下吧~")
+                show_info_dialog("时间到", "工作时间结束！休息一下吧~")
                 start_timer(work_time=work_time, break_time=break_time, is_work_time=False)  # 开始休息时间
             else:
-                messagebox.showinfo("时间到", "休息时间结束！开始新的工作周期")
+                show_info_dialog("时间到", "休息时间结束！开始新的工作周期")
                 start_timer(work_time=work_time, break_time=break_time, is_work_time=True)  # 开始工作时间
 
     countdown(work_time if is_work_time else break_time)
@@ -496,16 +629,6 @@ def confirm_close_action():
         result["action"] = action
         dialog.destroy()
 
-    def bind_hover_style(button):
-        def on_enter(event):
-            event.widget.config(bg='#8DCEA0', font=("", 11, "bold"))
-
-        def on_leave(event):
-            event.widget.config(bg='#A3DCB1', font=("", 11))
-
-        button.bind("<Enter>", on_enter)
-        button.bind("<Leave>", on_leave)
-
     dialog.protocol("WM_DELETE_WINDOW", close_dialog)
 
     width = min(root.winfo_width() - 24, 276)
@@ -527,8 +650,6 @@ def confirm_close_action():
         text="最小化",
         command=lambda: close_dialog("minimize"),
         font=("", 11),
-        bg='#A3DCB1',
-        fg='#333333',
         relief='flat',
         bd=0,
         highlightthickness=0,
@@ -543,8 +664,6 @@ def confirm_close_action():
         text="直接退出",
         command=lambda: close_dialog("quit"),
         font=("", 11),
-        bg='#A3DCB1',
-        fg='#333333',
         relief='flat',
         bd=0,
         highlightthickness=0,
@@ -626,16 +745,23 @@ if __name__ == "__main__":
     x_position, y_position = get_root_position()
     root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
 
+    content_width = 132
+    input_height = 64
+    button_height = 46
+
     # 提示标签
-    label = tk.Label(root, text="专注时长（分钟）", font=("", 11), bg='#C7EDCC', fg='#333333')
-    label.place(relx=0.5, rely=0.1, anchor='center')
+    focus_label = tk.Label(root, text="专注时长（分钟）", font=("", 11), bg='#C7EDCC', fg='#333333')
+    focus_label.place(relx=0.5, rely=0.15, anchor='center')
+
+    break_label = tk.Label(root, text="休息时长（分钟）", font=("", 11), bg='#C7EDCC', fg='#333333')
+    break_label.place(relx=0.5, rely=0.45, anchor='center')
 
     # 输入框
     vcmd = (root.register(validate_input), '%P')
-    entry = tk.Entry(
+    focus_entry = tk.Entry(
         root,
         width=20,
-        font=("", 40, "bold"),
+        font=("", 26, "bold"),
         justify='center',
         validate='key',
         validatecommand=vcmd,
@@ -645,11 +771,27 @@ if __name__ == "__main__":
         highlightthickness=0,
         relief='flat',
     )
-    entry.place(relx=0.5, rely=0.4, anchor='center', width=100, height=100)
-    entry.insert(0, str(get_saved_focus_minutes()))
+    focus_entry.place(relx=0.5, rely=0.28, anchor='center', width=content_width, height=input_height)
+    focus_entry.insert(0, str(get_saved_minutes("focus_minutes", DEFAULT_WORK_TIME)))
+
+    break_entry = tk.Entry(
+        root,
+        width=20,
+        font=("", 26, "bold"),
+        justify='center',
+        validate='key',
+        validatecommand=vcmd,
+        bg='#A3DCB1',
+        fg='#333333',
+        bd=0,
+        highlightthickness=0,
+        relief='flat',
+    )
+    break_entry.place(relx=0.5, rely=0.58, anchor='center', width=content_width, height=input_height)
+    break_entry.insert(0, str(get_saved_minutes("break_minutes", DEFAULT_BREAK_TIME)))
 
     def defocus_entry(event):
-        if event.widget != entry:
+        if event.widget not in (focus_entry, break_entry):
             root.focus()
 
     root.bind("<Button-1>", defocus_entry)
@@ -658,45 +800,19 @@ if __name__ == "__main__":
     root.protocol("WM_DELETE_WINDOW", confirm_close_action)
 
     # 鼠标悬停事件
-    def on_enter(event):
-        start_button.config(bg='#A3DCB1', font=("", 15, "bold"))
-
-    def on_leave(event):
-        start_button.config(bg='#A3DCB1', font=("", 15))
-
     # 开始按钮
     start_button = tk.Button(
-        root,
-        text="开始",
-        font=("", 15),
-        width=10,
-        height=2,
-        command=start_focus_session,
-        bg='#A3DCB1',
-        fg='#333333',
-        relief='flat',
-        bd=0,
-        highlightthickness=0,
+        root, text="开始", font=("", 15), command=start_focus_session, relief='flat', bd=0, highlightthickness=0
     )
-    start_button.place(relx=0.5, rely=0.75, anchor='center')
-    start_button.bind("<Enter>", on_enter)
-    start_button.bind("<Leave>", on_leave)
+    start_button.place(relx=0.5, rely=0.83, anchor='center', width=content_width, height=button_height)
+    bind_hover_style(start_button, font_size=15)
 
     # 创建关于按钮（使用问号图标）
     about_button = tk.Button(
-        root,
-        text="?",
-        font=("", 12),
-        width=2,
-        height=1,
-        command=show_about,
-        bg='#A3DCB1',
-        fg='#333333',
-        relief='flat',
-        bd=0,
-        highlightthickness=0,
+        root, text="?", font=("", 12), width=2, height=1, command=show_about, relief='flat', bd=0, highlightthickness=0
     )
-    about_button.place(relx=0.9, rely=0.1, anchor='center')
+    about_button.place(relx=0.88, rely=0.09, anchor='center')
+    bind_hover_style(about_button, font_size=12)
 
     root.update_idletasks()
     update_timer_controls()
