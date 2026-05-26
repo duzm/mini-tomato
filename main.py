@@ -6,6 +6,7 @@
 
 import os
 import queue
+import json
 import sys
 import threading
 import tkinter as tk
@@ -31,6 +32,160 @@ tray_icon = None
 tray_thread = None
 tray_visible = False
 action_queue = queue.SimpleQueue()
+root_position_job = None
+
+SETTINGS_DIR_NAME = "MiniTomato"
+SETTINGS_FILE_NAME = "settings.json"
+WINDOW_SIZE = (300, 240)
+FLOAT_WINDOW_SIZE = (200, 100)
+
+
+def get_settings_file_path():
+    base_dir = os.getenv("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base_dir, SETTINGS_DIR_NAME, SETTINGS_FILE_NAME)
+
+
+def load_settings():
+    settings_path = get_settings_file_path()
+    if not os.path.exists(settings_path):
+        return {}
+
+    try:
+        with open(settings_path, "r", encoding="utf-8") as settings_file:
+            data = json.load(settings_file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings():
+    settings_path = get_settings_file_path()
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    with open(settings_path, "w", encoding="utf-8") as settings_file:
+        json.dump(app_settings, settings_file, ensure_ascii=False, indent=2)
+
+
+def get_saved_position(key):
+    position = app_settings.get(key)
+    if not isinstance(position, dict):
+        return None
+
+    x = position.get("x")
+    y = position.get("y")
+    if isinstance(x, int) and isinstance(y, int):
+        return x, y
+    return None
+
+
+def set_saved_position(key, x, y):
+    app_settings[key] = {"x": int(x), "y": int(y)}
+    try:
+        save_settings()
+    except OSError:
+        pass
+
+
+def get_saved_focus_minutes():
+    default_minutes = DEFAULT_WORK_TIME // 60
+    minutes = app_settings.get("focus_minutes")
+    return minutes if isinstance(minutes, int) and minutes > 0 else default_minutes
+
+
+def set_saved_focus_minutes(minutes):
+    app_settings["focus_minutes"] = int(minutes)
+    try:
+        save_settings()
+    except OSError:
+        pass
+
+
+def get_virtual_screen_bounds():
+    min_x = root.winfo_vrootx()
+    min_y = root.winfo_vrooty()
+    width = root.winfo_vrootwidth()
+    height = root.winfo_vrootheight()
+
+    if width <= 1 or height <= 1:
+        min_x = 0
+        min_y = 0
+        width = root.winfo_screenwidth()
+        height = root.winfo_screenheight()
+
+    return min_x, min_y, width, height
+
+
+def clamp_position(x, y, window_width, window_height, min_x, min_y, screen_width, screen_height):
+    max_x = max(min_x + screen_width - window_width, min_x)
+    max_y = max(min_y + screen_height - window_height, min_y)
+    return min(max(x, min_x), max_x), min(max(y, min_y), max_y)
+
+
+def get_default_root_position():
+    window_width, window_height = WINDOW_SIZE
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    return (screen_width - window_width) // 2, (screen_height - window_height) // 2
+
+
+def get_root_position():
+    saved_position = get_saved_position("root_position")
+    x_position, y_position = saved_position if saved_position is not None else get_default_root_position()
+    min_x, min_y, screen_width, screen_height = get_virtual_screen_bounds()
+    return clamp_position(
+        x_position, y_position, WINDOW_SIZE[0], WINDOW_SIZE[1], min_x, min_y, screen_width, screen_height
+    )
+
+
+def get_default_float_position():
+    window_width, window_height = FLOAT_WINDOW_SIZE
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    return screen_width - window_width - 50, screen_height - window_height - 70
+
+
+def get_float_position():
+    saved_position = get_saved_position("float_position")
+    x_position, y_position = saved_position if saved_position is not None else get_default_float_position()
+    min_x, min_y, screen_width, screen_height = get_virtual_screen_bounds()
+    return clamp_position(
+        x_position, y_position, FLOAT_WINDOW_SIZE[0], FLOAT_WINDOW_SIZE[1], min_x, min_y, screen_width, screen_height
+    )
+
+
+def remember_root_position():
+    if root is None or not root.winfo_exists() or root.state() != "normal":
+        return
+    set_saved_position("root_position", root.winfo_x(), root.winfo_y())
+
+
+def remember_float_position():
+    if float_window is None:
+        return
+
+    try:
+        if float_window.winfo_exists():
+            set_saved_position("float_position", float_window.winfo_x(), float_window.winfo_y())
+    except tk.TclError:
+        pass
+
+
+def schedule_root_position_save(event=None):
+    global root_position_job
+
+    if root is None or not root.winfo_exists() or root.state() != "normal":
+        return
+
+    if root_position_job is not None:
+        try:
+            root.after_cancel(root_position_job)
+        except tk.TclError:
+            pass
+
+    root_position_job = root.after(200, remember_root_position)
+
+
+app_settings = load_settings()
 
 
 if sys.platform == "win32":
@@ -127,11 +282,15 @@ def get_focus_minutes():
 
 
 def start_focus_session():
-    start_timer(work_time=get_focus_minutes() * 60)
+    minutes = get_focus_minutes()
+    set_saved_focus_minutes(minutes)
+    start_timer(work_time=minutes * 60)
 
 
 def start_break_session():
-    start_timer(work_time=get_focus_minutes() * 60, break_time=DEFAULT_BREAK_TIME, is_work_time=False)
+    minutes = get_focus_minutes()
+    set_saved_focus_minutes(minutes)
+    start_timer(work_time=minutes * 60, break_time=DEFAULT_BREAK_TIME, is_work_time=False)
 
 
 def update_timer_controls():
@@ -157,6 +316,7 @@ def clear_timer_state(cancel_job=True, destroy_window=True):
     timer_job = None
 
     if destroy_window and float_window is not None:
+        remember_float_position()
         try:
             if float_window.winfo_exists():
                 float_window.destroy()
@@ -183,15 +343,8 @@ def start_timer(work_time=DEFAULT_WORK_TIME, break_time=DEFAULT_BREAK_TIME, is_w
     float_window.attributes("-topmost", True)  # 窗口置顶
     float_window.attributes("-alpha", 0.5)  # 设置窗口透明度
 
-    # 获取屏幕宽度和高度
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-
-    # 设置悬浮窗口的初始位置为屏幕的偏右下方
-    window_width = 200
-    window_height = 100
-    x_position = screen_width - window_width - 50
-    y_position = screen_height - window_height - 70
+    window_width, window_height = FLOAT_WINDOW_SIZE
+    x_position, y_position = get_float_position()
     float_window.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
 
     label = tk.Label(float_window, text="", font=("Helvetica", 48))
@@ -207,8 +360,12 @@ def start_timer(work_time=DEFAULT_WORK_TIME, break_time=DEFAULT_BREAK_TIME, is_w
         y = event.y - float_window.y + float_window.winfo_y()
         float_window.geometry(f"+{x}+{y}")
 
+    def finish_move(event):
+        remember_float_position()
+
     float_window.bind("<Button-1>", start_move)
     float_window.bind("<B1-Motion>", do_move)
+    float_window.bind("<ButtonRelease-1>", finish_move)
     update_timer_controls()
 
     # 倒计时功能
@@ -307,6 +464,7 @@ def hide_tray_icon():
 
 
 def hide_window_to_tray():
+    remember_root_position()
     if root.winfo_exists() and root.state() != "withdrawn":
         root.withdraw()
     show_tray_icon()
@@ -409,6 +567,7 @@ def confirm_close_action():
 
 
 def quit_application():
+    remember_root_position()
     stop_current_timer()
     hide_tray_icon()
     root.destroy()
@@ -463,15 +622,8 @@ if __name__ == "__main__":
     root.configure(bg='#C7EDCC')
     root.iconbitmap(resource_path(ICON_FILE))
 
-    # 获取屏幕宽度和高度
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-
-    # 设置主窗口的初始位置为屏幕中央
-    window_width = 300
-    window_height = 240
-    x_position = (screen_width - window_width) // 2
-    y_position = (screen_height - window_height) // 2
+    window_width, window_height = WINDOW_SIZE
+    x_position, y_position = get_root_position()
     root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
 
     # 提示标签
@@ -494,13 +646,14 @@ if __name__ == "__main__":
         relief='flat',
     )
     entry.place(relx=0.5, rely=0.4, anchor='center', width=100, height=100)
-    entry.insert(0, "25")
+    entry.insert(0, str(get_saved_focus_minutes()))
 
     def defocus_entry(event):
         if event.widget != entry:
             root.focus()
 
     root.bind("<Button-1>", defocus_entry)
+    root.bind("<Configure>", schedule_root_position_save)
     root.bind("<Unmap>", on_root_unmap)
     root.protocol("WM_DELETE_WINDOW", confirm_close_action)
 
