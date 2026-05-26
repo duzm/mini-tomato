@@ -13,7 +13,7 @@ from constant import ICON_FILE, VERSION
 
 script_file = "main.py"
 
-output_name = f"迷你番茄钟{VERSION}.exe"
+output_name = f"MiniTomato-{VERSION}.exe"
 
 # 检查图标文件是否存在
 if not os.path.exists(ICON_FILE):
@@ -33,5 +33,5 @@ else:
         ]
     )
 
-    # 复制生成的EXE文件为另一个文件，文件名固定为：迷你番茄钟-latest.exe
-    shutil.copy(f"dist/{output_name}", f"dist/迷你番茄钟-latest.exe")
+    # 复制生成的EXE文件为另一个文件，文件名固定为：MiniTomato-latest.exe
+    shutil.copy(f"dist/{output_name}", "dist/MiniTomato-latest.exe")
