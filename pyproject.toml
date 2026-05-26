@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "preserve"
+skip-magic-trailing-comma = true
