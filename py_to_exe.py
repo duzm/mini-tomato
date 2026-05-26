@@ -8,21 +8,24 @@
 import os
 import shutil
 import subprocess
+import sys
 
-from constant import ICON_FILE, VERSION
+from mini_tomato.constant import ICON_FILE, VERSION
 
 script_file = "main.py"
 
 output_name = f"MiniTomato-{VERSION}.exe"
 
-# 检查图标文件是否存在
-if not os.path.exists(ICON_FILE):
-    print(f"图标文件 {ICON_FILE} 不存在，请确保图标文件存在于当前目录中。")
-else:
-    # 运行 PyInstaller 命令打包脚本
+def main():
+    if not os.path.exists(ICON_FILE):
+        print(f"图标文件 {ICON_FILE} 不存在，请确保图标文件存在于当前目录中。")
+        return
+
     subprocess.run(
         [
-            "pyinstaller",
+            sys.executable,
+            "-m",
+            "PyInstaller",
             "--onefile",
             "--windowed",
             f"--icon={ICON_FILE}",
@@ -30,8 +33,12 @@ else:
             "--add-data",
             f"{ICON_FILE};.",
             script_file,
-        ]
+        ],
+        check=True,
     )
 
-    # 复制生成的EXE文件为另一个文件，文件名固定为：MiniTomato-latest.exe
     shutil.copy(f"dist/{output_name}", "dist/MiniTomato-latest.exe")
+
+
+if __name__ == "__main__":
+    main()
