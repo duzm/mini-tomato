@@ -21,8 +21,12 @@ from constant import APP_NAME, AUTHOR, DEFAULT_BREAK_TIME, DEFAULT_WORK_TIME, GI
 
 # 全局变量，用于跟踪当前的悬浮窗口
 float_window = None
+timer_job = None
+timer_active = False
+current_phase = None
 root = None
 entry = None
+start_button = None
 tray_icon = None
 tray_thread = None
 tray_visible = False
@@ -30,6 +34,7 @@ action_queue = queue.SimpleQueue()
 
 
 if sys.platform == "win32":
+
     class TrayIcon(pystray.Icon):
         def _on_notify(self, wparam, lparam):
             if lparam == pystray_win32.win32.WM_LBUTTONUP:
@@ -43,7 +48,8 @@ if sys.platform == "win32":
                 hmenu, descriptors = self._menu_handle
                 index = pystray_win32.win32.TrackPopupMenuEx(
                     hmenu,
-                    pystray_win32.win32.TPM_LEFTALIGN | pystray_win32.win32.TPM_BOTTOMALIGN
+                    pystray_win32.win32.TPM_LEFTALIGN
+                    | pystray_win32.win32.TPM_BOTTOMALIGN
                     | pystray_win32.win32.TPM_RETURNCMD,
                     point.x,
                     point.y,
@@ -128,12 +134,48 @@ def start_break_session():
     start_timer(work_time=get_focus_minutes() * 60, break_time=DEFAULT_BREAK_TIME, is_work_time=False)
 
 
-def start_timer(work_time=DEFAULT_WORK_TIME, break_time=DEFAULT_BREAK_TIME, is_work_time=True):
-    global float_window
+def update_timer_controls():
+    if start_button is not None and root is not None and root.winfo_exists():
+        if timer_active:
+            start_button.config(text="停止", command=stop_current_timer)
+        else:
+            start_button.config(text="开始", command=start_focus_session)
+    refresh_tray_menu()
 
-    # 如果已经存在一个悬浮窗口，先销毁它
-    if float_window is not None:
-        float_window.destroy()
+
+def clear_timer_state(cancel_job=True, destroy_window=True):
+    global float_window, timer_job, timer_active, current_phase
+
+    timer_active = False
+    current_phase = None
+
+    if cancel_job and timer_job is not None and root is not None and root.winfo_exists():
+        try:
+            root.after_cancel(timer_job)
+        except tk.TclError:
+            pass
+    timer_job = None
+
+    if destroy_window and float_window is not None:
+        try:
+            if float_window.winfo_exists():
+                float_window.destroy()
+        except tk.TclError:
+            pass
+    float_window = None
+    update_timer_controls()
+
+
+def stop_current_timer():
+    clear_timer_state()
+
+
+def start_timer(work_time=DEFAULT_WORK_TIME, break_time=DEFAULT_BREAK_TIME, is_work_time=True):
+    global float_window, timer_job, timer_active, current_phase
+
+    clear_timer_state()
+    timer_active = True
+    current_phase = "work" if is_work_time else "break"
 
     # 创建新的悬浮窗口
     float_window = tk.Toplevel(root)
@@ -167,16 +209,22 @@ def start_timer(work_time=DEFAULT_WORK_TIME, break_time=DEFAULT_BREAK_TIME, is_w
 
     float_window.bind("<Button-1>", start_move)
     float_window.bind("<B1-Motion>", do_move)
+    update_timer_controls()
 
     # 倒计时功能
     def countdown(count):
+        global timer_job
+
+        if not timer_active or float_window is None or not float_window.winfo_exists():
+            return
+
         mins, secs = divmod(count, 60)
         time_format = '{:02d}:{:02d}'.format(mins, secs)
         label.config(text=time_format)
         if count > 0:
-            float_window.after(1000, countdown, count - 1)
+            timer_job = float_window.after(1000, countdown, count - 1)
         else:
-            float_window.destroy()
+            clear_timer_state(cancel_job=False)
             if is_work_time:
                 messagebox.showinfo("时间到", "工作时间结束！休息一下吧~")
                 start_timer(work_time=work_time, break_time=break_time, is_work_time=False)  # 开始休息时间
@@ -202,6 +250,10 @@ def get_window_toggle_text(item=None):
     return "最小化窗口" if is_root_visible() else "显示窗口"
 
 
+def is_timer_active(item=None):
+    return timer_active
+
+
 def refresh_tray_menu():
     if tray_icon is not None:
         tray_icon.update_menu()
@@ -217,6 +269,7 @@ def create_tray_menu():
         pystray.MenuItem(get_window_toggle_text, enqueue_tray_action("toggle_window")),
         pystray.MenuItem("开始专注", enqueue_tray_action("start_focus")),
         pystray.MenuItem("开始休息", enqueue_tray_action("start_break")),
+        pystray.MenuItem("停止计时", enqueue_tray_action("stop_timer"), visible=is_timer_active),
         pystray.MenuItem("退出", enqueue_tray_action("quit")),
     )
 
@@ -356,11 +409,8 @@ def confirm_close_action():
 
 
 def quit_application():
-    global float_window
-
+    stop_current_timer()
     hide_tray_icon()
-    if float_window is not None and float_window.winfo_exists():
-        float_window.destroy()
     root.destroy()
 
 
@@ -380,6 +430,8 @@ def process_tray_actions():
             start_focus_session()
         elif action == "start_break":
             start_break_session()
+        elif action == "stop_timer":
+            stop_current_timer()
         elif action == "quit":
             quit_application()
             return
@@ -494,6 +546,7 @@ if __name__ == "__main__":
     about_button.place(relx=0.9, rely=0.1, anchor='center')
 
     root.update_idletasks()
+    update_timer_controls()
     show_tray_icon()
     root.deiconify()
     root.after(200, process_tray_actions)
